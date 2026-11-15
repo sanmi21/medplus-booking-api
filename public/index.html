@@ -1,5 +1,6 @@
 <!doctype html>
-<!-- The booking web page: see available slots, book one, see the confirmation.
+<!-- The booking web page: see available slots, book one, see the confirmation,
+     see and cancel your bookings, and find a booking by reference + email.
      It only calls the /app/* routes, so no API key is ever in the browser. -->
 <html lang="en">
 <head>
@@ -18,6 +19,7 @@
       --accent-soft: #e6f4f2;
       --error: #b42318;
       --error-soft: #fdecea;
+      --neutral-soft: #eef0f3;
       --radius: 10px;
     }
     @media (prefers-color-scheme: dark) {
@@ -32,10 +34,14 @@
         --accent-soft: #163330;
         --error: #ff8a80;
         --error-soft: #3a1d1b;
+        --neutral-soft: #262c37;
       }
     }
 
     * { box-sizing: border-box; }
+    /* Elements we hide with the `hidden` attribute must stay hidden, even when
+       a rule above gives them a display value (e.g. dl { display: grid }). */
+    [hidden] { display: none !important; }
     body {
       margin: 0;
       background: var(--bg);
@@ -55,6 +61,7 @@
       border-radius: var(--radius);
       padding: 20px;
     }
+    .card + .card, main + .card, .card[hidden] + .card { margin-top: 16px; }
     .status { color: var(--muted); margin: 0; }
 
     .slot-grid {
@@ -112,7 +119,20 @@
       font-weight: 600;
       cursor: pointer;
     }
-    .button:disabled { opacity: 0.6; cursor: wait; }
+    .button:disabled, .secondary-button:disabled { opacity: 0.6; cursor: wait; }
+    .secondary-button {
+      padding: 7px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--text);
+      font: inherit;
+      font-size: 0.9rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .secondary-button:hover { border-color: var(--accent); }
+    .danger-button { border-color: var(--error); color: var(--error); }
     .link-button {
       border: 0;
       background: none;
@@ -130,10 +150,60 @@
       margin: 0 0 14px;
     }
 
+    /* The booking reference on the confirmation screen: big, monospace, copyable. */
+    .reference-box {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 12px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      margin: 4px 0 8px;
+    }
+    .reference-label { width: 100%; font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+    .reference-code {
+      flex: 1 1 260px;
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 1.05rem;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+      user-select: all;
+    }
+
     dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 16px 0 20px; }
     dt { color: var(--muted); }
     dd { margin: 0; overflow-wrap: anywhere; }
-    .reference { font-family: ui-monospace, Consolas, monospace; font-size: 0.9rem; }
+    .mono { font-family: ui-monospace, Consolas, monospace; font-size: 0.9rem; }
+
+    /* My bookings */
+    .booking-list { list-style: none; margin: 0; padding: 0; }
+    .booking-item {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px 12px;
+      padding: 12px 0;
+      border-top: 1px solid var(--border);
+    }
+    .booking-item:first-child { border-top: 0; padding-top: 0; }
+    .booking-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .booking-title { font-weight: 600; }
+    .booking-sub { color: var(--muted); font-size: 0.9rem; }
+    .booking-ref { color: var(--muted); font-size: 0.8rem; font-family: ui-monospace, Consolas, monospace; overflow-wrap: anywhere; }
+    .booking-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+    .badge.cancelled { background: var(--neutral-soft); color: var(--muted); }
 
     @media (max-width: 480px) {
       dl { grid-template-columns: 1fr; gap: 2px; }
@@ -176,10 +246,15 @@
 
       <!-- Step 3: confirmation -->
       <section id="confirm-view" class="card" hidden>
-        <h2>You're booked ✓</h2>
-        <p class="status">Keep your booking reference. A copy of this page stays at this link.</p>
+        <h2 id="c-heading">You're booked ✓</h2>
+        <div class="reference-box">
+          <span class="reference-label">Your booking reference</span>
+          <code id="c-id" class="reference-code"></code>
+          <button type="button" class="secondary-button" id="copy-button">Copy</button>
+        </div>
+        <p class="status">Keep this reference. With your email, it finds your booking under
+          “Find a booking”. It’s also saved under “My bookings” on this device.</p>
         <dl>
-          <dt>Reference</dt><dd id="c-id" class="reference"></dd>
           <dt>With</dt><dd id="c-provider"></dd>
           <dt>When</dt><dd id="c-time"></dd>
           <dt>Name</dt><dd id="c-name"></dd>
@@ -189,6 +264,36 @@
         <button type="button" class="button" id="another-button">Book another appointment</button>
       </section>
     </main>
+
+    <!-- Bookings made on this device (ids kept in localStorage) -->
+    <section id="my-bookings" class="card" hidden>
+      <h2>My bookings</h2>
+      <p id="my-status" class="status" role="status"></p>
+      <p id="my-error" class="error" role="alert" hidden></p>
+      <ul id="my-list" class="booking-list"></ul>
+    </section>
+
+    <!-- Look up one booking: needs BOTH the reference and the email -->
+    <section id="find-booking" class="card">
+      <h2>Find a booking</h2>
+      <form id="find-form" novalidate>
+        <label>Booking reference
+          <input id="find-ref" name="reference" autocomplete="off" spellcheck="false">
+        </label>
+        <label>Email used to book
+          <input id="find-email" name="email" type="email" autocomplete="email">
+        </label>
+        <p id="find-error" class="error" role="alert" hidden></p>
+        <button type="submit" class="button" id="find-button">Find booking</button>
+      </form>
+      <dl id="find-result" hidden>
+        <dt>Reference</dt><dd id="f-id" class="mono"></dd>
+        <dt>With</dt><dd id="f-provider"></dd>
+        <dt>When</dt><dd id="f-time"></dd>
+        <dt>Name</dt><dd id="f-name"></dd>
+        <dt>Status</dt><dd id="f-status"></dd>
+      </dl>
+    </section>
   </div>
 
   <script>
@@ -218,6 +323,16 @@
       return `${dayFormat.format(start)}, ${timeFormat.format(start)} – ${timeFormat.format(end)}`;
     }
 
+    function statusLabel(status) {
+      return status === 'confirmed' ? 'Confirmed' : 'Cancelled';
+    }
+
+    function setConfirmationStatus(status) {
+      document.getElementById('c-status').textContent = statusLabel(status);
+      document.getElementById('c-heading').textContent =
+        status === 'confirmed' ? 'You’re booked ✓' : 'This booking is cancelled';
+    }
+
     function show(name) {
       for (const [key, element] of Object.entries(views)) {
         element.hidden = key !== name;
@@ -239,6 +354,35 @@
       } catch {
         return { status: 0, data: {}, headers: new Headers() };
       }
+    }
+
+    // ---- Saved booking ids (this device only) ----
+    // localStorage can be unavailable (private mode, blocked storage) or hold
+    // junk, so every read and write is wrapped and falls back to "nothing saved".
+
+    const STORAGE_KEY = 'medplus.bookingIds';
+
+    function readSavedIds() {
+      try {
+        const ids = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
+        return Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function writeSavedIds(ids) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(ids));
+      } catch {
+        // Storage unavailable: the booking still exists, it just won't be remembered here.
+      }
+    }
+
+    function saveBookingId(id) {
+      const ids = readSavedIds().filter((saved) => saved !== id);
+      ids.unshift(id);
+      writeSavedIds(ids.slice(0, 50));
     }
 
     // ---- Step 1: list slots, grouped by day in the visitor's own time zone ----
@@ -338,7 +482,9 @@
       submitButton.textContent = 'Confirm booking';
 
       if (status === 201) {
+        saveBookingId(data.id);
         showConfirmation(data);
+        loadMyBookings();
       } else if (status === 409) {
         showFormError('Sorry, someone just booked that slot. Please choose another time.');
         loadSlots();
@@ -368,10 +514,21 @@
       document.getElementById('c-time').textContent = slot ? describeSlot(slot) : `Slot ${booking.slot_id}`;
       document.getElementById('c-name').textContent = booking.name;
       document.getElementById('c-email').textContent = booking.email;
-      document.getElementById('c-status').textContent = booking.status === 'confirmed' ? 'Confirmed' : 'Cancelled';
+      setConfirmationStatus(booking.status);
       history.replaceState(null, '', '#booking=' + booking.id);
       show('confirm');
     }
+
+    document.getElementById('copy-button').addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      try {
+        await navigator.clipboard.writeText(document.getElementById('c-id').textContent);
+        button.textContent = 'Copied';
+      } catch {
+        button.textContent = 'Select and copy it';
+      }
+      setTimeout(() => { button.textContent = 'Copy'; }, 2000);
+    });
 
     document.getElementById('another-button').addEventListener('click', () => {
       history.replaceState(null, '', location.pathname);
@@ -380,9 +537,200 @@
       loadSlots();
     });
 
+    // ---- My bookings ----
+
+    const myCard = document.getElementById('my-bookings');
+    const myStatus = document.getElementById('my-status');
+    const myError = document.getElementById('my-error');
+    const myList = document.getElementById('my-list');
+
+    async function loadMyBookings() {
+      const ids = readSavedIds();
+      myError.hidden = true;
+      if (ids.length === 0) {
+        myCard.hidden = true;
+        return;
+      }
+      myCard.hidden = false;
+      myStatus.hidden = false;
+      myStatus.textContent = 'Loading your bookings…';
+
+      const results = await Promise.all(
+        ids.map((id) => callApp('GET', '/bookings/' + encodeURIComponent(id))),
+      );
+
+      // A 404 means the booking no longer exists, so forget its id. Keep ids
+      // that failed for other reasons (e.g. offline) to try again next time.
+      const keep = [];
+      const bookings = [];
+      let failed = 0;
+      results.forEach((result, i) => {
+        if (result.status === 200) {
+          bookings.push(result.data);
+          keep.push(ids[i]);
+        } else if (result.status !== 404) {
+          failed += 1;
+          keep.push(ids[i]);
+        }
+      });
+      writeSavedIds(keep);
+
+      if (bookings.length === 0 && failed === 0) {
+        myCard.hidden = true;
+        return;
+      }
+
+      // Soonest appointment first; bookings whose slot we can't see go last.
+      const startOf = (b) => (slotsById[b.slot_id] ? new Date(slotsById[b.slot_id].start).getTime() : Infinity);
+      bookings.sort((a, b) => startOf(a) - startOf(b));
+
+      myList.replaceChildren(...bookings.map(renderMyBooking));
+      myStatus.hidden = failed === 0;
+      myStatus.textContent = failed > 0 ? 'Some bookings couldn’t be loaded. Please refresh to try again.' : '';
+    }
+
+    function renderMyBooking(booking) {
+      const slot = slotsById[booking.slot_id];
+      const item = document.createElement('li');
+      item.className = 'booking-item';
+
+      const main = document.createElement('div');
+      main.className = 'booking-main';
+      const title = document.createElement('span');
+      title.className = 'booking-title';
+      title.textContent = slot ? slot.provider : `Slot ${booking.slot_id}`;
+      const when = document.createElement('span');
+      when.className = 'booking-sub';
+      when.textContent = slot ? describeSlot(slot) : 'Time unavailable';
+      const ref = document.createElement('span');
+      ref.className = 'booking-ref';
+      ref.textContent = `Ref ${booking.id}`;
+      main.append(title, when, ref);
+
+      const actions = document.createElement('div');
+      actions.className = 'booking-actions';
+      const badge = document.createElement('span');
+      badge.className = booking.status === 'confirmed' ? 'badge' : 'badge cancelled';
+      badge.textContent = statusLabel(booking.status);
+      actions.append(badge);
+      if (booking.status === 'confirmed') {
+        actions.append(makeCancelControls(booking, actions));
+      }
+
+      item.append(main, actions);
+      return item;
+    }
+
+    // "Cancel" asks for a second, explicit click before doing anything, so a
+    // stray tap can't cancel an appointment.
+    function makeCancelControls(booking, actions) {
+      const cancelButton = document.createElement('button');
+      cancelButton.type = 'button';
+      cancelButton.className = 'secondary-button';
+      cancelButton.textContent = 'Cancel';
+
+      cancelButton.addEventListener('click', () => {
+        const yes = document.createElement('button');
+        yes.type = 'button';
+        yes.className = 'secondary-button danger-button';
+        yes.textContent = 'Yes, cancel';
+        const keep = document.createElement('button');
+        keep.type = 'button';
+        keep.className = 'secondary-button';
+        keep.textContent = 'Keep it';
+
+        keep.addEventListener('click', () => {
+          yes.remove();
+          keep.replaceWith(cancelButton);
+        });
+        yes.addEventListener('click', async () => {
+          yes.disabled = true;
+          keep.disabled = true;
+          yes.textContent = 'Cancelling…';
+          const { status } = await callApp('DELETE', '/bookings/' + encodeURIComponent(booking.id));
+          if (status === 200 || status === 409) {
+            // 409 = it was already cancelled (e.g. in another tab): just refresh.
+            await refreshLists();
+            return;
+          }
+          myError.textContent = 'We couldn’t cancel that booking. Please try again.';
+          myError.hidden = false;
+          yes.remove();
+          keep.replaceWith(cancelButton);
+        });
+
+        cancelButton.replaceWith(keep);
+        actions.append(yes);
+      });
+      return cancelButton;
+    }
+
+    // After a cancel, both the free slots and "My bookings" have changed.
+    async function refreshLists() {
+      await loadSlots();
+      await loadMyBookings();
+      // If the confirmation for a just-cancelled booking is on screen, update it too.
+      const shownId = document.getElementById('c-id').textContent;
+      if (!views.confirm.hidden && shownId) {
+        const { status, data } = await callApp('GET', '/bookings/' + encodeURIComponent(shownId));
+        if (status === 200) setConfirmationStatus(data.status);
+      }
+    }
+
+    // ---- Find a booking (reference + email; never by email alone) ----
+
+    const findForm = document.getElementById('find-form');
+    const findError = document.getElementById('find-error');
+    const findResult = document.getElementById('find-result');
+    const findButton = document.getElementById('find-button');
+
+    findForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      findError.hidden = true;
+      findResult.hidden = true;
+
+      const reference = document.getElementById('find-ref').value.trim();
+      const email = document.getElementById('find-email').value.trim();
+      if (!reference || !email) {
+        findError.textContent = 'Please enter both your booking reference and your email.';
+        findError.hidden = false;
+        return;
+      }
+
+      findButton.disabled = true;
+      findButton.textContent = 'Searching…';
+      const path = '/bookings/' + encodeURIComponent(reference) + '?email=' + encodeURIComponent(email);
+      const { status, data } = await callApp('GET', path);
+      findButton.disabled = false;
+      findButton.textContent = 'Find booking';
+
+      if (status === 200) {
+        const slot = slotsById[data.slot_id];
+        document.getElementById('f-id').textContent = data.id;
+        document.getElementById('f-provider').textContent = slot ? slot.provider : '—';
+        document.getElementById('f-time').textContent = slot ? describeSlot(slot) : `Slot ${data.slot_id}`;
+        document.getElementById('f-name').textContent = data.name;
+        document.getElementById('f-status').textContent = statusLabel(data.status);
+        findResult.hidden = false;
+      } else if (status === 404) {
+        // Same message whether the reference or the email is wrong.
+        findError.textContent = 'We couldn’t find a booking with that reference and email.';
+        findError.hidden = false;
+      } else if (status === 0) {
+        findError.textContent = 'We couldn’t reach the clinic. Check your connection and try again.';
+        findError.hidden = false;
+      } else {
+        findError.textContent = 'Something went wrong on our side. Please try again.';
+        findError.hidden = false;
+      }
+    });
+
+    // ---- Start ----
+
     async function start() {
       const match = location.hash.match(/^#booking=(.+)$/);
       await loadSlots();
+      loadMyBookings();
       if (match) {
         const { status, data } = await callApp('GET', '/bookings/' + encodeURIComponent(match[1]));
         if (status === 200) {

@@ -127,6 +127,18 @@ export async function getBooking(id) {
   return bookingToJson(result.rows[0]);
 }
 
+// For the web page's "Find a booking": returns the booking only if the email
+// also matches (ignoring case and spaces). A wrong email gets the same 404 as a
+// wrong reference, so the answer never reveals that a reference exists.
+export async function findBookingByReferenceAndEmail(id, email) {
+  const booking = await getBooking(id);
+  const givenEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (givenEmail === '' || givenEmail !== booking.email) {
+    throw new HttpError(404, 'booking not found');
+  }
+  return booking;
+}
+
 export async function cancelBooking(id) {
   if (!isUuid(id)) {
     throw new HttpError(404, 'booking not found');

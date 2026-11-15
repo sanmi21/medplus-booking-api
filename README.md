@@ -49,16 +49,29 @@ Every endpoint needs the `X-API-Key` header.
 ### Web page
 
 `public/index.html` is a single page with plain HTML, CSS and JavaScript (no build
-step): see available slots grouped by day, pick one, enter name and email, see
-the confirmation. It calls only these routes, which need **no** API key:
+step):
+
+- **Book:** see available slots grouped by day, pick one, enter name and email.
+- **Confirmation:** the booking reference is shown prominently, with a Copy button.
+- **My bookings:** after each successful booking, its id is saved in this
+  browser's `localStorage`. The page loads each saved id and lists provider,
+  time and status, with a Cancel button (two-step, so a stray tap can't
+  cancel) on confirmed bookings. Ids of bookings that no longer exist are
+  forgotten automatically.
+- **Find a booking:** booking reference **and** email; shown only if both match.
+
+It calls only these routes, which need **no** API key:
 
 | Method | Path | Same service as |
 |---|---|---|
 | GET | `/app/slots` | `GET /slots` |
 | POST | `/app/bookings` | `POST /bookings` |
 | GET | `/app/bookings/:id` | `GET /bookings/:id` |
+| GET | `/app/bookings/:id?email=` | as above, but 404 unless the email matches |
+| DELETE | `/app/bookings/:id` | `DELETE /bookings/:id` |
 
-There is deliberately no `/app` route for reset or cancel.
+There is deliberately no `/app` route for reset, and none that lists bookings
+by email: knowing someone's email must never reveal their bookings.
 
 ## Design decisions
 
@@ -135,7 +148,15 @@ There is deliberately no `/app` route for reset or cancel.
   page instead calls `/app/*` routes on our own server, which run the **same
   service functions** as the API routes, so the page and the API can never
   behave differently (validation, 409s, and later rate limiting all apply).
-  The page has no way to reset or cancel.
+  The page has no way to reset, or to list bookings by email.
+- **The booking reference works like a ticket.** Booking ids are random UUIDs
+  (122 random bits), so they can't be guessed; whoever holds one can view and
+  cancel that booking from the page. "Find a booking" additionally requires
+  the email, and a wrong email gets exactly the same 404 as a wrong reference,
+  so the response never confirms that a reference exists.
+- **`localStorage` is only a convenience.** Reads and writes are wrapped in
+  try/catch (storage can be blocked, full, or hold junk), and the page works
+  without it; the server stays the source of truth for every booking.
 - **The page is safe against injected HTML.** Provider and patient names are
   inserted with `textContent`, never `innerHTML`.
 - **Confirmation has its own link** (`/#booking=<id>`), so reloading the page

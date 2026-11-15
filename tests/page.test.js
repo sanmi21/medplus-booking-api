@@ -65,9 +65,68 @@ test('there is no /app route for reset, and unknown /app paths are JSON 404s', a
   const resetAttempt = await app('POST', '/reset', { body: { slots: [] } });
   assert.equal(resetAttempt.status, 404);
   assert.deepEqual(resetAttempt.body, { error: 'not found' });
+});
 
-  const cancelAttempt = await app('DELETE', '/bookings/00000000-0000-4000-8000-000000000000');
-  assert.equal(cancelAttempt.status, 404);
+test('the page can never list bookings by email alone', async () => {
+  await reset([makeSlot('s1', 'Dr Ade', 24)]);
+  const email = uniqueEmail();
+  await app('POST', '/bookings', { body: { slot_id: 's1', name: 'Ada Obi', email } });
+
+  const res = await app('GET', `/bookings?email=${encodeURIComponent(email)}`);
+  assert.equal(res.status, 404);
+  assert.deepEqual(res.body, { error: 'not found' });
+});
+
+test('Find a booking: reference + matching email returns it (ignoring case and spaces)', async () => {
+  await reset([makeSlot('s1', 'Dr Ade', 24)]);
+  const email = uniqueEmail();
+  const created = await app('POST', '/bookings', { body: { slot_id: 's1', name: 'Ada Obi', email } });
+
+  const found = await app('GET', `/bookings/${created.body.id}?email=${encodeURIComponent(`  ${email.toUpperCase()} `)}`);
+  assert.equal(found.status, 200);
+  assert.deepEqual(found.body, created.body);
+});
+
+test('Find a booking: a wrong or empty email gets the same 404 as a wrong reference', async () => {
+  await reset([makeSlot('s1', 'Dr Ade', 24)]);
+  const email = uniqueEmail();
+  const created = await app('POST', '/bookings', { body: { slot_id: 's1', name: 'Ada Obi', email } });
+  const notFound = { error: 'booking not found' };
+
+  const wrongEmail = await app('GET', `/bookings/${created.body.id}?email=${encodeURIComponent(uniqueEmail())}`);
+  assert.equal(wrongEmail.status, 404);
+  assert.deepEqual(wrongEmail.body, notFound);
+
+  const emptyEmail = await app('GET', `/bookings/${created.body.id}?email=`);
+  assert.equal(emptyEmail.status, 404);
+  assert.deepEqual(emptyEmail.body, notFound);
+
+  const wrongRef = await app('GET', `/bookings/00000000-0000-4000-8000-000000000000?email=${encodeURIComponent(email)}`);
+  assert.equal(wrongRef.status, 404);
+  assert.deepEqual(wrongRef.body, notFound);
+
+  const junkRef = await app('GET', `/bookings/not-a-uuid?email=${encodeURIComponent(email)}`);
+  assert.equal(junkRef.status, 404);
+  assert.deepEqual(junkRef.body, notFound);
+});
+
+test('DELETE /app/bookings/:id cancels, frees the slot, and a second cancel is 409', async () => {
+  await reset([makeSlot('s1', 'Dr Ade', 24)]);
+  const created = await app('POST', '/bookings', { body: { slot_id: 's1', name: 'Ada Obi', email: uniqueEmail() } });
+
+  const cancelled = await app('DELETE', `/bookings/${created.body.id}`);
+  assert.equal(cancelled.status, 200);
+  assert.deepEqual(cancelled.body, { ...created.body, status: 'cancelled' });
+
+  const slots = await app('GET', '/slots');
+  assert.equal(slots.body.slots[0].available, true);
+
+  const again = await app('DELETE', `/bookings/${created.body.id}`);
+  assert.equal(again.status, 409);
+  assert.deepEqual(again.body, { error: 'booking already cancelled' });
+
+  const unknown = await app('DELETE', '/bookings/00000000-0000-4000-8000-000000000000');
+  assert.equal(unknown.status, 404);
 });
 
 test('/app routes return JSON errors for malformed JSON', async () => {
