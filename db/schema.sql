@@ -46,3 +46,14 @@ create table if not exists idempotency_keys (
 
 -- Makes "this person's bookings, oldest first" fast: filter by email, walk by seq.
 create index if not exists bookings_email_seq on bookings (email, seq);
+
+-- Level 5 ------------------------------------------------------------------
+
+-- One row per booking attempt, used to allow at most 5 attempts per email in
+-- any 60 seconds. Old rows are deleted as we go, so the table stays small.
+create table if not exists booking_attempts (
+  id           bigserial primary key,
+  email        text not null,
+  attempted_at timestamptz not null default now()
+);
+create index if not exists booking_attempts_email_time on booking_attempts (email, attempted_at);

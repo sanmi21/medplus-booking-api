@@ -1,11 +1,12 @@
 // Business rules for bookings. Knows nothing about Express: it takes plain
 // values, returns plain objects, and throws HttpError for client mistakes.
 
-import { pool, query } from '../db.js';
+import { pool, query, withTransaction } from '../db.js';
 import { HttpError } from '../lib/httpError.js';
 import { isUuid, isPlainObject, isNonEmptyString, isValidEmail, parseLimit } from '../lib/validate.js';
 import { bookingToJson } from '../lib/serialize.js';
 import { runOnce } from './idempotency.service.js';
+import { checkRateLimit, emailForRateLimit } from './rateLimit.service.js';
 
 const MAX_NAME_LENGTH = 200;
 const MAX_EMAIL_LENGTH = 254; // the longest email address the standards allow
@@ -39,14 +40,27 @@ function checkNewBooking(body) {
   return { slotId: body.slot_id, name, email };
 }
 
-// Entry point for POST /bookings (API and web page). Returns { status, body }.
-// Without an Idempotency-Key it books directly; with one, the booking runs
-// at most once for that key (see idempotency.service.js).
+// Entry point for POST /bookings (API and web page). Returns { status, body },
+// plus `headers` when a request with a key is rate limited (Retry-After).
+//
+// The order is: idempotency replay → rate limit → validation → booking.
+// A replay returns the stored answer without counting as a new attempt.
 export async function placeBooking(body, idempotencyKey) {
+  const email = emailForRateLimit(body);
+
   if (!idempotencyKey) {
+    // The attempt is counted in its own small transaction, which commits
+    // before booking. So a booking that then fails (400/404/409) still counts.
+    await withTransaction((client) => checkRateLimit(client, email));
     return { status: 201, body: await createBooking(body) };
   }
-  return runOnce(idempotencyKey, body, (client) => createBooking(body, client));
+
+  // With a key, everything runs in runOnce's transaction. Failed bookings
+  // don't throw out of it (their answer is stored), so the attempt still counts.
+  return runOnce(idempotencyKey, body, async (client) => {
+    await checkRateLimit(client, email);
+    return createBooking(body, client);
+  });
 }
 
 // `db` is the pool by default, or a transaction's client when called from

@@ -8,7 +8,8 @@ export const bookingsRouter = Router();
 bookingsRouter.post('/bookings', async (req, res) => {
   // placeBooking returns the status too, because an idempotent replay must
   // repeat the original status code (201, 400, 404 or 409).
-  const { status, body } = await placeBooking(req.body, req.get('Idempotency-Key'));
+  const { status, body, headers } = await placeBooking(req.body, req.get('Idempotency-Key'));
+  if (headers) res.set(headers); // e.g. Retry-After on a 429
   res.status(status).json(body);
 });
 

@@ -17,7 +17,8 @@ pageRouter.get('/slots', async (req, res) => {
 pageRouter.post('/bookings', async (req, res) => {
   // The page sends a fresh Idempotency-Key per attempt, so a double-tap or a
   // network retry can't create two bookings.
-  const { status, body } = await placeBooking(req.body, req.get('Idempotency-Key'));
+  const { status, body, headers } = await placeBooking(req.body, req.get('Idempotency-Key'));
+  if (headers) res.set(headers); // e.g. Retry-After on a 429
   res.status(status).json(body);
 });
 

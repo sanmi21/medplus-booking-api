@@ -57,11 +57,13 @@ test('POST /bookings returns 400 for a body that is not a JSON object', async ()
 
 test('POST /bookings returns 400 for missing, empty or non-string fields', async () => {
   await reset([makeSlot('s1', 'Dr Ade', 24)]);
-  const good = { slot_id: 's1', name: 'Ada Obi', email: uniqueEmail() };
   const badValues = [undefined, '', '   ', null, 42, true, ['s1'], { a: 1 }];
 
   for (const field of ['slot_id', 'name', 'email']) {
     for (const value of badValues) {
+      // A fresh email each time: these are many attempts, and Level 5 allows
+      // only 5 per email per minute.
+      const good = { slot_id: 's1', name: 'Ada Obi', email: uniqueEmail() };
       const body = { ...good, [field]: value };
       const res = await api('POST', '/bookings', { body });
       assert.equal(res.status, 400, `${field} = ${JSON.stringify(value)}`);

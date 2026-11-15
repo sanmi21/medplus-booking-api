@@ -105,7 +105,7 @@ async function capture(run) {
     return { status: 201, body: await run() };
   } catch (err) {
     if (err instanceof HttpError) {
-      return { status: err.status, body: { error: err.message } };
+      return { status: err.status, body: { error: err.message }, headers: err.headers };
     }
     throw err;
   }

@@ -5,7 +5,7 @@ Built for the Koya assessment (Task 1), following the spec at
 https://koyaacademy.com/assessment-api.
 
 - **Live URL:** https://medplus-booking-api.vercel.app (the booking page is at `/`)
-- **Levels done:** 1, 2, 3, 4, plus the web page
+- **Levels done:** 1, 2, 3, 4, 5, plus the web page
 
 ## Stack
 
@@ -30,7 +30,8 @@ BASE_URL=https://medplus-booking-api.vercel.app npm test     # against the live 
 ```
 
 `API_KEY` is read from `.env` (or the environment) and must match the server's key.
-Test files run one at a time, because each test starts with `/reset`.
+Test files run one at a time, because each test starts with `/reset`. One Level 5
+test really waits out the 60-second rate-limit window, so a full run takes over a minute.
 
 ## Endpoints
 
@@ -40,7 +41,7 @@ Every endpoint needs the `X-API-Key` header.
 |---|---|---|
 | POST | `/reset` | 1 |
 | GET | `/slots` | 1 |
-| POST | `/bookings` (optional `Idempotency-Key` header) | 1, 2, 3, 4 |
+| POST | `/bookings` (optional `Idempotency-Key` header) | 1, 2, 3, 4, 5 |
 | GET | `/bookings?email=&limit=&cursor=` | 4 |
 | GET | `/bookings/:id` | 1 |
 | DELETE | `/bookings/:id` | 3 |
@@ -109,6 +110,26 @@ There is deliberately no `/app` route for reset or cancel.
   repeats a booking when new ones arrive between pages, and stays fast however
   deep you page. We fetch `limit + 1` rows to know if another page exists. The
   cursor is the last `seq`, base64url-encoded so clients treat it as opaque.
+- **Rate limiting: 5 attempts per email per sliding 60 seconds.** Each attempt
+  is a row in `booking_attempts`. To decide, we count that email's rows from
+  the last 60 seconds (measured from *now*, not per calendar minute, which
+  would let 10 through around :59/:00). The 6th gets 429 with `Retry-After` =
+  seconds until the oldest attempt leaves the window (rounded up, at least 1).
+  Rejected attempts aren't recorded, so waiting that long always works.
+- **Rate limiting is safe under simultaneous requests.** Before counting, the
+  transaction takes a Postgres advisory lock on that email
+  (`pg_advisory_xact_lock(hashtextextended(email, 0))`), released at commit.
+  Requests for the same email take turns, so 10 simultaneous attempts can't all
+  see "4 so far": exactly 5 get in. Other emails use different locks and never wait.
+  The database stores the counts, so the limit holds across all Vercel instances.
+- **What counts as an attempt.** Every `POST /bookings` (API or web page) with
+  a non-empty email, counted on the trimmed, lower-cased email, *before*
+  validation, so failed attempts (400/404/409) count too. Without a key, the
+  attempt is committed in its own small transaction before booking; with a
+  key, it's committed together with the stored answer. Order: API key →
+  idempotency replay → rate limit → validation → booking. An idempotent replay
+  returns the stored answer and is not a new attempt. A 429 is not stored
+  against an idempotency key, so the same key can be retried after waiting.
 - **The API key never reaches the browser.** A key in page JavaScript is
   visible to anyone who opens the page, so it wouldn't protect anything. The
   page instead calls `/app/*` routes on our own server, which run the **same
@@ -167,5 +188,13 @@ There is deliberately no `/app` route for reset or cancel.
   `null`) rather than 23 with `limit=10`, because Level 5 allows only 5 booking
   attempts per email per minute, and the tests must keep passing after Level 5.
   The logic tested is the same.
+- A request with no usable email (missing, empty or not a string) gets 400 and
+  isn't counted: there's no person to count it against.
+- The rate limit applies to creating bookings only, as the spec says; reads
+  and cancels aren't limited. `/reset` clears all recorded attempts.
+- Local testing uses PGlite, which runs every connection in one shared
+  session, so simultaneous transactions can interfere there in ways real
+  Postgres never allows. The concurrency tests are authoritative only against
+  a real Postgres (Neon); locally, all tests pass with a single connection.
 - Cancelling a booking whose slot is in the past is allowed (the spec doesn't
   forbid it, and it changes nothing for anyone else).

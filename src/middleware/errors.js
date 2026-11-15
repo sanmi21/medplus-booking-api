@@ -13,6 +13,7 @@ export function notFound(req, res) {
 export function errorHandler(err, req, res, next) {
   // Our own, expected errors: send the status and message as-is.
   if (err instanceof HttpError) {
+    if (err.headers) res.set(err.headers);
     return res.status(err.status).json({ error: err.message });
   }
 
