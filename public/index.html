@@ -1,0 +1,400 @@
+<!doctype html>
+<!-- The booking web page: see available slots, book one, see the confirmation.
+     It only calls the /app/* routes, so no API key is ever in the browser. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MedPlus Clinic Booking</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --card: #ffffff;
+      --text: #1d2330;
+      --muted: #5d6676;
+      --border: #dde1e7;
+      --accent: #0f766e;
+      --accent-text: #ffffff;
+      --accent-soft: #e6f4f2;
+      --error: #b42318;
+      --error-soft: #fdecea;
+      --radius: 10px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #12151b;
+        --card: #1b2029;
+        --text: #e8ebf0;
+        --muted: #a0a8b6;
+        --border: #2e3542;
+        --accent: #2bb3a3;
+        --accent-text: #08201d;
+        --accent-soft: #163330;
+        --error: #ff8a80;
+        --error-soft: #3a1d1b;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .page { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+    header { margin-bottom: 24px; }
+    header h1 { margin: 0; font-size: 1.6rem; }
+    header p { margin: 4px 0 0; color: var(--muted); }
+    h2 { font-size: 1.2rem; margin: 0 0 12px; }
+    h3 { font-size: 0.95rem; margin: 20px 0 8px; color: var(--muted); font-weight: 600; }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+    .status { color: var(--muted); margin: 0; }
+
+    .slot-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 8px;
+    }
+    .slot {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--text);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .slot:hover, .slot:focus-visible { border-color: var(--accent); background: var(--accent-soft); outline: none; }
+    .slot-time { font-weight: 600; }
+    .slot-provider { color: var(--muted); font-size: 0.9rem; }
+
+    .chosen {
+      background: var(--accent-soft);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin: 0 0 16px;
+    }
+    label { display: block; font-weight: 600; margin-bottom: 14px; }
+    input {
+      display: block;
+      width: 100%;
+      margin-top: 6px;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      font: inherit;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+    .button {
+      display: inline-block;
+      padding: 11px 18px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--accent);
+      color: var(--accent-text);
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .button:disabled { opacity: 0.6; cursor: wait; }
+    .link-button {
+      border: 0;
+      background: none;
+      color: var(--accent);
+      font: inherit;
+      padding: 0;
+      margin-bottom: 12px;
+      cursor: pointer;
+    }
+    .error {
+      background: var(--error-soft);
+      color: var(--error);
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin: 0 0 14px;
+    }
+
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 16px 0 20px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; overflow-wrap: anywhere; }
+    .reference { font-family: ui-monospace, Consolas, monospace; font-size: 0.9rem; }
+
+    @media (max-width: 480px) {
+      dl { grid-template-columns: 1fr; gap: 2px; }
+      dd { margin-bottom: 8px; }
+      .button { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <header>
+      <h1>MedPlus Clinic</h1>
+      <p>Book an appointment in under a minute.</p>
+    </header>
+
+    <main>
+      <!-- Step 1: choose a slot -->
+      <section id="slots-view" class="card">
+        <h2>Available appointments</h2>
+        <p id="slots-status" class="status" role="status">Loading appointments…</p>
+        <div id="slot-list"></div>
+      </section>
+
+      <!-- Step 2: enter details -->
+      <section id="form-view" class="card" hidden>
+        <button type="button" class="link-button" id="back-button">← Choose another time</button>
+        <h2>Your details</h2>
+        <p id="chosen-slot" class="chosen"></p>
+        <form id="booking-form" novalidate>
+          <label>Full name
+            <input id="name" name="name" autocomplete="name" maxlength="200">
+          </label>
+          <label>Email
+            <input id="email" name="email" type="email" autocomplete="email" maxlength="254">
+          </label>
+          <p id="form-error" class="error" role="alert" hidden></p>
+          <button type="submit" class="button" id="submit-button">Confirm booking</button>
+        </form>
+      </section>
+
+      <!-- Step 3: confirmation -->
+      <section id="confirm-view" class="card" hidden>
+        <h2>You're booked ✓</h2>
+        <p class="status">Keep your booking reference. A copy of this page stays at this link.</p>
+        <dl>
+          <dt>Reference</dt><dd id="c-id" class="reference"></dd>
+          <dt>With</dt><dd id="c-provider"></dd>
+          <dt>When</dt><dd id="c-time"></dd>
+          <dt>Name</dt><dd id="c-name"></dd>
+          <dt>Email</dt><dd id="c-email"></dd>
+          <dt>Status</dt><dd id="c-status"></dd>
+        </dl>
+        <button type="button" class="button" id="another-button">Book another appointment</button>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    // All text from the server is inserted with textContent (never innerHTML),
+    // so a provider name or patient name can't inject HTML into the page.
+
+    const views = {
+      slots: document.getElementById('slots-view'),
+      form: document.getElementById('form-view'),
+      confirm: document.getElementById('confirm-view'),
+    };
+    const slotsStatus = document.getElementById('slots-status');
+    const slotList = document.getElementById('slot-list');
+    const form = document.getElementById('booking-form');
+    const formError = document.getElementById('form-error');
+    const submitButton = document.getElementById('submit-button');
+
+    let slotsById = {};   // every slot from the last load, so we can show provider/time later
+    let chosenSlot = null;
+
+    const dayFormat = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+    const timeFormat = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' });
+
+    function describeSlot(slot) {
+      const start = new Date(slot.start);
+      const end = new Date(slot.end);
+      return `${dayFormat.format(start)}, ${timeFormat.format(start)} – ${timeFormat.format(end)}`;
+    }
+
+    function show(name) {
+      for (const [key, element] of Object.entries(views)) {
+        element.hidden = key !== name;
+      }
+      window.scrollTo(0, 0);
+    }
+
+    // Calls one of our /app routes. Returns { status, data, headers }.
+    // status is 0 when the network request itself failed.
+    async function callApp(method, path, body, extraHeaders = {}) {
+      try {
+        const response = await fetch('/app' + path, {
+          method,
+          headers: body ? { 'Content-Type': 'application/json', ...extraHeaders } : extraHeaders,
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const data = await response.json().catch(() => ({}));
+        return { status: response.status, data, headers: response.headers };
+      } catch {
+        return { status: 0, data: {}, headers: new Headers() };
+      }
+    }
+
+    // ---- Step 1: list slots, grouped by day in the visitor's own time zone ----
+
+    async function loadSlots() {
+      slotsStatus.hidden = false;
+      slotsStatus.textContent = 'Loading appointments…';
+      slotList.replaceChildren();
+
+      const { status, data } = await callApp('GET', '/slots');
+      if (status !== 200) {
+        slotsStatus.textContent = 'Sorry, we couldn’t load appointments. Please refresh the page.';
+        return;
+      }
+
+      slotsById = {};
+      for (const slot of data.slots) slotsById[slot.id] = slot;
+
+      // Only show slots that are free and haven't started yet.
+      const now = Date.now();
+      const open = data.slots.filter((s) => s.available && new Date(s.start).getTime() > now);
+      if (open.length === 0) {
+        slotsStatus.textContent = 'No appointments are available right now. Please check back later.';
+        return;
+      }
+      slotsStatus.hidden = true;
+
+      // The API already sorts by start time, so grouping keeps days in order.
+      const groups = new Map();
+      for (const slot of open) {
+        const day = dayFormat.format(new Date(slot.start));
+        if (!groups.has(day)) groups.set(day, []);
+        groups.get(day).push(slot);
+      }
+
+      for (const [day, slots] of groups) {
+        const heading = document.createElement('h3');
+        heading.textContent = day;
+        const grid = document.createElement('div');
+        grid.className = 'slot-grid';
+        for (const slot of slots) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'slot';
+          const time = document.createElement('span');
+          time.className = 'slot-time';
+          time.textContent = timeFormat.format(new Date(slot.start));
+          const provider = document.createElement('span');
+          provider.className = 'slot-provider';
+          provider.textContent = slot.provider;
+          button.append(time, provider);
+          button.addEventListener('click', () => chooseSlot(slot));
+          grid.append(button);
+        }
+        slotList.append(heading, grid);
+      }
+    }
+
+    // ---- Step 2: the booking form ----
+
+    function chooseSlot(slot) {
+      chosenSlot = slot;
+      document.getElementById('chosen-slot').textContent = `${slot.provider} · ${describeSlot(slot)}`;
+      formError.hidden = true;
+      show('form');
+      document.getElementById('name').focus();
+    }
+
+    function showFormError(message) {
+      formError.textContent = message;
+      formError.hidden = false;
+    }
+
+    // Server messages are short and lowercase ("email is invalid"); make them read nicely.
+    function sentence(message) {
+      if (!message) return 'Please check your details and try again.';
+      return message.charAt(0).toUpperCase() + message.slice(1) + '.';
+    }
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      formError.hidden = true;
+      submitButton.disabled = true;
+      submitButton.textContent = 'Booking…';
+
+      const body = {
+        slot_id: chosenSlot.id,
+        name: document.getElementById('name').value,
+        email: document.getElementById('email').value,
+      };
+      // A fresh key per attempt: if this request is retried, the server
+      // returns the same booking instead of creating a second one.
+      const headers = { 'Idempotency-Key': crypto.randomUUID() };
+      const { status, data, headers: responseHeaders } = await callApp('POST', '/bookings', body, headers);
+
+      submitButton.disabled = false;
+      submitButton.textContent = 'Confirm booking';
+
+      if (status === 201) {
+        showConfirmation(data);
+      } else if (status === 409) {
+        showFormError('Sorry, someone just booked that slot. Please choose another time.');
+        loadSlots();
+      } else if (status === 429) {
+        const wait = responseHeaders.get('Retry-After') || 'a few';
+        showFormError(`Too many attempts, please wait ${wait} seconds and try again.`);
+      } else if (status === 400 || status === 404) {
+        showFormError(sentence(data.error));
+      } else if (status === 0) {
+        showFormError('We couldn’t reach the clinic. Check your connection and try again.');
+      } else {
+        showFormError('Something went wrong on our side. Please try again.');
+      }
+    });
+
+    document.getElementById('back-button').addEventListener('click', () => {
+      show('slots');
+      loadSlots();
+    });
+
+    // ---- Step 3: confirmation (also reachable later via #booking=<id>) ----
+
+    function showConfirmation(booking) {
+      const slot = slotsById[booking.slot_id];
+      document.getElementById('c-id').textContent = booking.id;
+      document.getElementById('c-provider').textContent = slot ? slot.provider : '—';
+      document.getElementById('c-time').textContent = slot ? describeSlot(slot) : `Slot ${booking.slot_id}`;
+      document.getElementById('c-name').textContent = booking.name;
+      document.getElementById('c-email').textContent = booking.email;
+      document.getElementById('c-status').textContent = booking.status === 'confirmed' ? 'Confirmed' : 'Cancelled';
+      history.replaceState(null, '', '#booking=' + booking.id);
+      show('confirm');
+    }
+
+    document.getElementById('another-button').addEventListener('click', () => {
+      history.replaceState(null, '', location.pathname);
+      form.reset();
+      show('slots');
+      loadSlots();
+    });
+
+    async function start() {
+      const match = location.hash.match(/^#booking=(.+)$/);
+      await loadSlots();
+      if (match) {
+        const { status, data } = await callApp('GET', '/bookings/' + encodeURIComponent(match[1]));
+        if (status === 200) {
+          showConfirmation(data);
+          return;
+        }
+        history.replaceState(null, '', location.pathname);
+      }
+      show('slots');
+    }
+
+    start();
+  </script>
+</body>
+</html>

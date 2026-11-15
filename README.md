@@ -4,8 +4,8 @@ An API that lets patients book clinic appointment slots, plus a simple web page 
 Built for the Koya assessment (Task 1), following the spec at
 https://koyaacademy.com/assessment-api.
 
-- **Live URL:** https://medplus-booking-api.vercel.app
-- **Levels done:** 1, 2, 3
+- **Live URL:** https://medplus-booking-api.vercel.app (the booking page is at `/`)
+- **Levels done:** 1, 2, 3, plus the web page
 
 ## Stack
 
@@ -44,6 +44,20 @@ Every endpoint needs the `X-API-Key` header.
 | GET | `/bookings/:id` | 1 |
 | DELETE | `/bookings/:id` | 3 |
 
+### Web page
+
+`public/index.html` is a single page with plain HTML, CSS and JavaScript (no build
+step): see available slots grouped by day, pick one, enter name and email, see
+the confirmation. It calls only these routes, which need **no** API key:
+
+| Method | Path | Same service as |
+|---|---|---|
+| GET | `/app/slots` | `GET /slots` |
+| POST | `/app/bookings` | `POST /bookings` |
+| GET | `/app/bookings/:id` | `GET /bookings/:id` |
+
+There is deliberately no `/app` route for reset or cancel.
+
 ## Design decisions
 
 - **API key checked first.** The key check runs before anything else, even
@@ -71,6 +85,16 @@ Every endpoint needs the `X-API-Key` header.
   If two cancels race, only one gets the row back; the other is told 409
   "already cancelled". Only when nothing changed do we look the booking up, to
   choose between 404 (doesn't exist) and 409 (already cancelled).
+- **The API key never reaches the browser.** A key in page JavaScript is
+  visible to anyone who opens the page, so it wouldn't protect anything. The
+  page instead calls `/app/*` routes on our own server, which run the **same
+  service functions** as the API routes, so the page and the API can never
+  behave differently (validation, 409s, and later rate limiting all apply).
+  The page has no way to reset or cancel.
+- **The page is safe against injected HTML.** Provider and patient names are
+  inserted with `textContent`, never `innerHTML`.
+- **Confirmation has its own link** (`/#booking=<id>`), so reloading the page
+  still shows it. Booking ids are random UUIDs, so they can't be guessed.
 - **"Has the slot started?" uses the database clock** (`start_at <= now()`), so
   every server instance agrees on the time and compares it in UTC.
 
