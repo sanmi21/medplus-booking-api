@@ -1,10 +1,11 @@
 // Business rules for bookings. Knows nothing about Express: it takes plain
 // values, returns plain objects, and throws HttpError for client mistakes.
 
-import { query } from '../db.js';
+import { pool, query } from '../db.js';
 import { HttpError } from '../lib/httpError.js';
-import { isUuid, isPlainObject, isNonEmptyString, isValidEmail } from '../lib/validate.js';
+import { isUuid, isPlainObject, isNonEmptyString, isValidEmail, parseLimit } from '../lib/validate.js';
 import { bookingToJson } from '../lib/serialize.js';
+import { runOnce } from './idempotency.service.js';
 
 const MAX_NAME_LENGTH = 200;
 const MAX_EMAIL_LENGTH = 254; // the longest email address the standards allow
@@ -38,13 +39,25 @@ function checkNewBooking(body) {
   return { slotId: body.slot_id, name, email };
 }
 
-export async function createBooking(body) {
+// Entry point for POST /bookings (API and web page). Returns { status, body }.
+// Without an Idempotency-Key it books directly; with one, the booking runs
+// at most once for that key (see idempotency.service.js).
+export async function placeBooking(body, idempotencyKey) {
+  if (!idempotencyKey) {
+    return { status: 201, body: await createBooking(body) };
+  }
+  return runOnce(idempotencyKey, body, (client) => createBooking(body, client));
+}
+
+// `db` is the pool by default, or a transaction's client when called from
+// runOnce, so the booking and its idempotency record commit together.
+export async function createBooking(body, db = pool) {
   const { slotId, name, email } = checkNewBooking(body);
 
   // Step 4 and 5: the slot must exist and must not have started.
   // We ask the database for the time (now()) so every server instance uses
   // the same clock as the stored slot times.
-  const slotResult = await query(
+  const slotResult = await db.query(
     'select start_at <= now() as has_started from slots where id = $1',
     [slotId],
   );
@@ -63,10 +76,11 @@ export async function createBooking(body) {
   // lets exactly one win; the others hit the conflict and insert nothing.
   //
   // ON CONFLICT ... DO NOTHING means a loser gets 0 rows back instead of an
-  // error. That matters in Level 4, where an error would abort the transaction.
+  // error. That matters for idempotency: an error inside a transaction would
+  // abort it, and we couldn't save the 409 answer for retries.
   let result;
   try {
-    result = await query(
+    result = await db.query(
       `insert into bookings (slot_id, name, email)
        values ($1, $2, $3)
        on conflict (slot_id) where status = 'confirmed' do nothing
@@ -84,6 +98,17 @@ export async function createBooking(body) {
 
   if (result.rows.length === 0) {
     throw new HttpError(409, 'slot already booked');
+  }
+  return bookingToJson(result.rows[0]);
+}
+
+export async function getBooking(id) {
+  if (!isUuid(id)) {
+    throw new HttpError(404, 'booking not found');
+  }
+  const result = await query('select * from bookings where id = $1', [id]);
+  if (result.rows.length === 0) {
+    throw new HttpError(404, 'booking not found');
   }
   return bookingToJson(result.rows[0]);
 }
@@ -114,13 +139,47 @@ export async function cancelBooking(id) {
   throw new HttpError(409, 'booking already cancelled');
 }
 
-export async function getBooking(id) {
-  if (!isUuid(id)) {
-    throw new HttpError(404, 'booking not found');
+// ---- Listing a person's bookings (cursor pagination) ----------------------
+
+// The cursor is the `seq` of the last booking on the page, wrapped in
+// base64url so clients treat it as an opaque token rather than a number.
+function encodeCursor(seq) {
+  return Buffer.from(String(seq)).toString('base64url');
+}
+
+function decodeCursor(cursor) {
+  if (typeof cursor !== 'string' || !/^[A-Za-z0-9_-]+$/.test(cursor)) {
+    throw new HttpError(400, 'invalid cursor');
   }
-  const result = await query('select * from bookings where id = $1', [id]);
-  if (result.rows.length === 0) {
-    throw new HttpError(404, 'booking not found');
+  const seq = Buffer.from(cursor, 'base64url').toString();
+  if (!/^\d{1,18}$/.test(seq)) {
+    throw new HttpError(400, 'invalid cursor');
   }
-  return bookingToJson(result.rows[0]);
+  return seq;
+}
+
+export async function listBookings({ email, limit, cursor }) {
+  if (!isNonEmptyString(email)) {
+    throw new HttpError(400, 'email is required');
+  }
+  const pageSize = parseLimit(limit);
+  const afterSeq = cursor === undefined ? '0' : decodeCursor(cursor);
+
+  // Keyset pagination: "the next rows after this seq", not "skip N rows".
+  // It stays correct even if new bookings arrive while someone is paging.
+  // We fetch one extra row only to learn whether another page exists.
+  const result = await query(
+    `select * from bookings
+     where email = $1 and seq > $2::bigint
+     order by seq
+     limit $3`,
+    [email.trim().toLowerCase(), afterSeq, pageSize + 1],
+  );
+
+  const hasMore = result.rows.length > pageSize;
+  const rows = result.rows.slice(0, pageSize);
+  return {
+    bookings: rows.map(bookingToJson),
+    next_cursor: hasMore ? encodeCursor(rows[rows.length - 1].seq) : null,
+  };
 }

@@ -30,3 +30,19 @@ create table if not exists bookings (
 -- Partial (WHERE status = 'confirmed') so a cancelled booking frees the slot.
 create unique index if not exists one_confirmed_booking_per_slot
   on bookings (slot_id) where status = 'confirmed';
+
+-- Level 4 ------------------------------------------------------------------
+
+-- One row per Idempotency-Key. The primary key is what makes retries safe:
+-- two requests with the same key can't both insert a row, so the second one
+-- waits for the first to finish and then replays its stored answer.
+create table if not exists idempotency_keys (
+  key          text primary key,
+  request_hash text not null,          -- SHA-256 of the request body
+  status_code  int,                    -- null only while the first request is running
+  response     jsonb,
+  created_at   timestamptz not null default now()
+);
+
+-- Makes "this person's bookings, oldest first" fast: filter by email, walk by seq.
+create index if not exists bookings_email_seq on bookings (email, seq);

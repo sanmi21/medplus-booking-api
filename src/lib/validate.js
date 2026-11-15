@@ -1,5 +1,7 @@
 // Small input-checking helpers shared by the services.
 
+import { HttpError } from './httpError.js';
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Booking ids are UUIDs. Checking first means a junk id like "abc" gives a
@@ -23,6 +25,22 @@ export function isValidEmail(value) {
 // True if the value is a plain {...} object (not null, not an array).
 export function isPlainObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// The ?limit= for listing bookings: a whole number from 1 to 50, default 10.
+// Anything else ("0", "51", "abc", "2.5", "-1", "") is a 400.
+export function parseLimit(value) {
+  if (value === undefined) {
+    return 10;
+  }
+  if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+    throw new HttpError(400, 'limit must be a whole number from 1 to 50');
+  }
+  const limit = Number(value);
+  if (limit < 1 || limit > 50) {
+    throw new HttpError(400, 'limit must be a whole number from 1 to 50');
+  }
+  return limit;
 }
 
 // True if JavaScript can turn the string into a real point in time.

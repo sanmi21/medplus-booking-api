@@ -5,7 +5,7 @@
 
 import { Router } from 'express';
 import { listSlots } from '../services/slots.service.js';
-import { createBooking, getBooking } from '../services/bookings.service.js';
+import { placeBooking, getBooking } from '../services/bookings.service.js';
 
 export const pageRouter = Router();
 
@@ -15,8 +15,10 @@ pageRouter.get('/slots', async (req, res) => {
 });
 
 pageRouter.post('/bookings', async (req, res) => {
-  const booking = await createBooking(req.body);
-  res.status(201).json(booking);
+  // The page sends a fresh Idempotency-Key per attempt, so a double-tap or a
+  // network retry can't create two bookings.
+  const { status, body } = await placeBooking(req.body, req.get('Idempotency-Key'));
+  res.status(status).json(body);
 });
 
 pageRouter.get('/bookings/:id', async (req, res) => {

@@ -5,7 +5,7 @@ Built for the Koya assessment (Task 1), following the spec at
 https://koyaacademy.com/assessment-api.
 
 - **Live URL:** https://medplus-booking-api.vercel.app (the booking page is at `/`)
-- **Levels done:** 1, 2, 3, plus the web page
+- **Levels done:** 1, 2, 3, 4, plus the web page
 
 ## Stack
 
@@ -40,7 +40,8 @@ Every endpoint needs the `X-API-Key` header.
 |---|---|---|
 | POST | `/reset` | 1 |
 | GET | `/slots` | 1 |
-| POST | `/bookings` | 1, 2, 3 |
+| POST | `/bookings` (optional `Idempotency-Key` header) | 1, 2, 3, 4 |
+| GET | `/bookings?email=&limit=&cursor=` | 4 |
 | GET | `/bookings/:id` | 1 |
 | DELETE | `/bookings/:id` | 3 |
 
@@ -85,6 +86,29 @@ There is deliberately no `/app` route for reset or cancel.
   If two cancels race, only one gets the row back; the other is told 409
   "already cancelled". Only when nothing changed do we look the booking up, to
   choose between 404 (doesn't exist) and 409 (already cancelled).
+- **Idempotent retries.** With an `Idempotency-Key`, everything happens in one
+  transaction: (1) claim the key by inserting it into `idempotency_keys`
+  (primary key) with a SHA-256 hash of the body; (2) run the booking; (3) save
+  the status code and response on the key's row; (4) commit. If a second
+  request with the same key arrives while the first is still running, its
+  insert **waits** on the first one's uncommitted row, then sees the finished
+  answer and replays it. So even 10 simultaneous retries create exactly one
+  booking and all get the same id. The same key with a different body hash
+  gets 422. The booking and its stored answer commit together, so a crash
+  can never leave a booking without its answer or the other way round.
+- **Which answers are remembered.** Final outcomes (201, 400, 404, 409) are
+  stored, so a retry always gets the same answer, even if the booking was
+  cancelled in between. Server errors are not stored: the transaction rolls
+  back, the key is released, and a later retry can succeed.
+- **Body hash ignores key order.** The body is turned into JSON with its keys
+  sorted before hashing, so `{"a":1,"b":2}` and `{"b":2,"a":1}` count as the
+  same body.
+- **Keyset (cursor) pagination.** Bookings have a `seq` column (insertion
+  order). A page is "the next `limit` rows with `seq` greater than the cursor",
+  using an index on `(email, seq)`. Unlike `OFFSET`, this never skips or
+  repeats a booking when new ones arrive between pages, and stays fast however
+  deep you page. We fetch `limit + 1` rows to know if another page exists. The
+  cursor is the last `seq`, base64url-encoded so clients treat it as opaque.
 - **The API key never reaches the browser.** A key in page JavaScript is
   visible to anyone who opens the page, so it wouldn't protect anything. The
   page instead calls `/app/*` routes on our own server, which run the **same
@@ -133,5 +157,15 @@ There is deliberately no `/app` route for reset or cancel.
   "already started" → 400.
 - Validation (400/404) is checked before availability (409): a bad request is
   reported as bad even if the slot is also taken.
+- Idempotency keys are global (not per email) and are cleared by `/reset`.
+  An empty `Idempotency-Key` header counts as no key; one longer than 255
+  characters is a 400.
+- `GET /bookings`: `email` is required (400 if missing or empty) and matched
+  after trimming and lower-casing; all statuses are listed; a malformed cursor
+  is a 400; a person with no bookings gets `{"bookings": [], "next_cursor": null}`.
+- The pagination test pages through 5 bookings with `limit=2` (2, 2, 1, then
+  `null`) rather than 23 with `limit=10`, because Level 5 allows only 5 booking
+  attempts per email per minute, and the tests must keep passing after Level 5.
+  The logic tested is the same.
 - Cancelling a booking whose slot is in the past is allowed (the spec doesn't
   forbid it, and it changes nothing for anyone else).
