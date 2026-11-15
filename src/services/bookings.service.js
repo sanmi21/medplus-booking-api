@@ -55,14 +55,63 @@ export async function createBooking(body) {
     throw new HttpError(400, 'slot has already started');
   }
 
-  // Step 6: save the booking.
-  const result = await query(
-    `insert into bookings (slot_id, name, email)
-     values ($1, $2, $3)
-     returning *`,
-    [slotId, name, email],
-  );
+  // Step 6: save the booking — but only if nobody else holds the slot.
+  //
+  // We do NOT check "is the slot free?" and then insert: two requests could
+  // both see "free" before either inserts. Instead we just try the insert and
+  // let the unique index (one_confirmed_booking_per_slot) decide. Postgres
+  // lets exactly one win; the others hit the conflict and insert nothing.
+  //
+  // ON CONFLICT ... DO NOTHING means a loser gets 0 rows back instead of an
+  // error. That matters in Level 4, where an error would abort the transaction.
+  let result;
+  try {
+    result = await query(
+      `insert into bookings (slot_id, name, email)
+       values ($1, $2, $3)
+       on conflict (slot_id) where status = 'confirmed' do nothing
+       returning *`,
+      [slotId, name, email],
+    );
+  } catch (err) {
+    // Safety net: if the index ever reports the clash as an error instead
+    // (code 23505 = unique violation), it still means "already booked".
+    if (err.code === '23505') {
+      throw new HttpError(409, 'slot already booked');
+    }
+    throw err;
+  }
+
+  if (result.rows.length === 0) {
+    throw new HttpError(409, 'slot already booked');
+  }
   return bookingToJson(result.rows[0]);
+}
+
+export async function cancelBooking(id) {
+  if (!isUuid(id)) {
+    throw new HttpError(404, 'booking not found');
+  }
+
+  // One atomic statement: it only changes a booking that is still confirmed.
+  // If two cancel requests race, only one gets the row back; the other sees
+  // 0 rows and reports "already cancelled" below.
+  const result = await query(
+    `update bookings set status = 'cancelled'
+     where id = $1 and status = 'confirmed'
+     returning *`,
+    [id],
+  );
+  if (result.rows.length === 1) {
+    return bookingToJson(result.rows[0]);
+  }
+
+  // Nothing changed: either the booking doesn't exist, or it was already cancelled.
+  const existing = await query('select 1 from bookings where id = $1', [id]);
+  if (existing.rows.length === 0) {
+    throw new HttpError(404, 'booking not found');
+  }
+  throw new HttpError(409, 'booking already cancelled');
 }
 
 export async function getBooking(id) {

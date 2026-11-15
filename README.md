@@ -5,7 +5,7 @@ Built for the Koya assessment (Task 1), following the spec at
 https://koyaacademy.com/assessment-api.
 
 - **Live URL:** https://medplus-booking-api.vercel.app
-- **Levels done:** 1, 2
+- **Levels done:** 1, 2, 3
 
 ## Stack
 
@@ -40,8 +40,9 @@ Every endpoint needs the `X-API-Key` header.
 |---|---|---|
 | POST | `/reset` | 1 |
 | GET | `/slots` | 1 |
-| POST | `/bookings` | 1, 2 |
+| POST | `/bookings` | 1, 2, 3 |
 | GET | `/bookings/:id` | 1 |
+| DELETE | `/bookings/:id` | 3 |
 
 ## Design decisions
 
@@ -54,6 +55,22 @@ Every endpoint needs the `X-API-Key` header.
   `name`, `email` are non-empty strings → lengths and email format → slot exists
   (404) → slot hasn't started (400) → save. Cheap checks that need no database
   come first, so bad input never costs a query.
+- **No double booking, even at the same instant.** A partial unique index,
+  `UNIQUE (slot_id) WHERE status = 'confirmed'`, lets the database itself
+  refuse a second confirmed booking for a slot. The insert uses
+  `ON CONFLICT ... DO NOTHING RETURNING *`: the winner gets its row back, every
+  other request gets 0 rows → 409. We never "check if free, then insert", because
+  two requests could both pass the check before either inserts. A Postgres
+  unique-violation error (`23505`) is also mapped to 409 as a safety net.
+  Tested with 20 simultaneous requests: exactly one 201, nineteen 409s.
+- **Cancelling frees the slot automatically.** The index only covers
+  `confirmed` rows, so once a booking is `cancelled` the slot can be booked
+  again, while the cancelled booking stays on record.
+- **Atomic cancel.** One statement:
+  `UPDATE ... SET status='cancelled' WHERE id=$1 AND status='confirmed' RETURNING *`.
+  If two cancels race, only one gets the row back; the other is told 409
+  "already cancelled". Only when nothing changed do we look the booking up, to
+  choose between 404 (doesn't exist) and 409 (already cancelled).
 - **"Has the slot started?" uses the database clock** (`start_at <= now()`), so
   every server instance agrees on the time and compares it in UTC.
 
@@ -90,3 +107,7 @@ Every endpoint needs the `X-API-Key` header.
 - A field that isn't a string (e.g. a number) counts as invalid → 400.
 - A slot that started a moment ago but hasn't ended yet still counts as
   "already started" → 400.
+- Validation (400/404) is checked before availability (409): a bad request is
+  reported as bad even if the slot is also taken.
+- Cancelling a booking whose slot is in the past is allowed (the spec doesn't
+  forbid it, and it changes nothing for anyone else).
