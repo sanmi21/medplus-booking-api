@@ -4,8 +4,8 @@ An API that lets patients book clinic appointment slots, plus a simple web page 
 Built for the Koya assessment (Task 1), following the spec at
 https://koyaacademy.com/assessment-api.
 
-- **Live URL:** _(add after first deploy)_
-- **Levels done:** 1
+- **Live URL:** https://medplus-booking-api.vercel.app
+- **Levels done:** 1, 2
 
 ## Stack
 
@@ -25,23 +25,37 @@ Node.js 20+, Express 5, PostgreSQL on Neon (`pg`, no ORM), deployed on Vercel.
 The tests call a running server over HTTP, so the same tests check local and live.
 
 ```bash
-npm test                                   # against http://localhost:3000
-BASE_URL=https://your-app.vercel.app npm test   # against the live deployment
+npm test                                                     # against http://localhost:3000
+BASE_URL=https://medplus-booking-api.vercel.app npm test     # against the live deployment
 ```
 
-`API_KEY` is read from `.env` (or the environment). Test files run one at a time,
-because each test starts with `/reset`.
+`API_KEY` is read from `.env` (or the environment) and must match the server's key.
+Test files run one at a time, because each test starts with `/reset`.
 
 ## Endpoints
+
+Every endpoint needs the `X-API-Key` header.
 
 | Method | Path | Level |
 |---|---|---|
 | POST | `/reset` | 1 |
 | GET | `/slots` | 1 |
-| POST | `/bookings` | 1 |
+| POST | `/bookings` | 1, 2 |
 | GET | `/bookings/:id` | 1 |
 
 ## Design decisions
+
+- **API key checked first.** The key check runs before anything else, even
+  before the JSON body is read, so any request without the right key gets 401.
+  The comparison uses `crypto.timingSafeEqual` on SHA-256 hashes of both keys:
+  it takes the same time however much of the key is right, so the key can't be
+  guessed one character at a time. The key lives only in an environment variable.
+- **Booking checks run in a fixed order:** body is a JSON object → `slot_id`,
+  `name`, `email` are non-empty strings → lengths and email format → slot exists
+  (404) → slot hasn't started (400) → save. Cheap checks that need no database
+  come first, so bad input never costs a query.
+- **"Has the slot started?" uses the database clock** (`start_at <= now()`), so
+  every server instance agrees on the time and compares it in UTC.
 
 - **Times.** Slot times are stored twice: as `timestamptz` (a real point in time,
   used for sorting and "has it started?") and as the raw string received. The API
@@ -67,3 +81,12 @@ because each test starts with `/reset`.
   date can't be parsed, or two slots share an id.
 - Slots with the same start time are ordered by `id`, so the order is always the same.
 - A booking id that isn't a valid UUID returns 404 (it can't exist), not 400.
+- Unknown routes also need the API key: without it they return 401, with it 404.
+- Email format check is deliberately simple: `something@something.something`, no
+  spaces. Max lengths: name 200 characters, email 254 (the standard limit).
+- `name` and `email` are trimmed and `email` is lower-cased, as the spec says.
+  `slot_id` is an id, not typed text, so it is used exactly as sent
+  (`" s1"` is a different, unknown slot → 404).
+- A field that isn't a string (e.g. a number) counts as invalid → 400.
+- A slot that started a moment ago but hasn't ended yet still counts as
+  "already started" → 400.

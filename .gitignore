@@ -1,3 +1,7 @@
 node_modules
-.env
 .vercel
+
+# Any env file holds real secrets. Only the empty template is committed.
+.env
+.env.*
+!.env.example
